@@ -1,0 +1,135 @@
+---
+title: "Exercise Manner Prediction Model"
+author: "Kurt Eichinger"
+date: "6/29/2018"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Summary
+
+The goal of this analysis will be to develop a predictive model for exercise manner. We will generate a tool to quantify how well people exercise, based on data obtained from accelerometers on the belt, arm, forearm, and dumbell of six participants who performed exercises in correct and incorrect ways. The data contain labels identifying the quality of the exercise (under the "classe" variable), and we will use this to predict the outcomes of activities in our test data. We will critique this model from its results when using it to evaluate 20 different test cases.
+
+The data for this project come from this source: [link](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har).
+
+## Getting and Cleaning the Data
+
+Let us load all of the packages we might need for this analysis as we download, clean, and partition our data (so that we can estimate the out of sample error). We will also set the seed to guarantee reproducibility.
+
+```{r}
+set.seed(1029384756)
+library(caret)
+library(knitr)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(randomForest)
+library(gbm)
+trainURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+training <- read.csv(url(trainURL), na.strings=c("NA","#DIV/0!",""))
+testing <- read.csv(url(testURL), na.strings=c("NA","#DIV/0!",""))
+inTrain <- createDataPartition(training$classe, p=0.7, list=FALSE)
+trainingfortraining <- training[inTrain, ]
+trainingfortesting <- training[-inTrain, ]
+dim(trainingfortraining); dim(trainingfortesting); dim(testing)
+```
+
+There is a great amount of extraneous information and missing data in this set. We must separate the wheat from the chaff. We will eliminate the variables that are unnecessary for the predictive model, mostly NA, or have nearly zero variance. These modifications are performed on all data subsets.
+
+```{r}
+# We eliminate the variables that have nearly zero variance.
+near0var <- nearZeroVar(trainingfortraining)
+trainingfortraining <- trainingfortraining[, -near0var]
+trainingfortesting <- trainingfortesting[, -near0var]
+
+# We eliminate the first seven variables because they are not involved.
+trainingfortraining <- trainingfortraining[, -(1:7)]
+trainingfortesting <- trainingfortesting[, -(1:7)]
+
+# We eliminate the variables that are mostly NA (> 95%).
+eliminateNAs <- sapply(trainingfortraining, function(x) mean(is.na(x))) > 0.95
+trainingfortraining <- trainingfortraining[, eliminateNAs == FALSE]
+trainingfortesting <- trainingfortesting[, eliminateNAs == FALSE]
+dim(trainingfortraining); dim(trainingfortesting)
+```
+
+```{r}
+# Let's remove the "problem_id" column from the testing data and format the set.
+colremoval <- colnames(trainingfortraining[, -52])
+testing <- testing[colremoval]
+dim(testing)
+```
+
+## Training the Model
+
+We will now test the classification tree, random forest, and gradient boosting modeling methods. By utilizing cross validation, we seek to limit overfitting and improve efficiency.
+
+### Classification Tree
+
+```{r}
+set.seed(48003)
+trControl <- trainControl(method="cv", number=5)
+classificationtreemodel <- train(classe~., data=trainingfortraining, method="rpart", trControl=trControl)
+rpart.plot(classificationtreemodel$finalModel)
+```
+
+```{r}
+prediction_model_1 <- predict(classificationtreemodel, newdata = trainingfortesting)
+confusion_matrix_1 <- confusionMatrix(trainingfortesting$classe, prediction_model_1)
+confusion_matrix_1$table;confusion_matrix_1$overall[1]
+```
+
+At under 49%, the accuracy achieved by classification trees is very low (expected out of sample error of 51%). Let's try another method.
+
+### Random Forest
+
+```{r}
+randomforestmodel <- train(classe ~ ., data = trainingfortraining, method = "rf", trControl = trControl, verbose = FALSE)
+print(randomforestmodel)
+```
+
+The greatest accuracy is achieved with 26 predictors.
+
+```{r}
+prediction_model_2 <- predict(randomforestmodel, newdata = trainingfortesting)
+confusion_matrix_2 <- confusionMatrix(trainingfortesting$classe, prediction_model_2)
+confusion_matrix_2$table;confusion_matrix_2$overall[1]
+```
+
+Using five folds for our cross validation did not result in much accuracy under the classification tree method, but it helped achieve great accuracy for our random forest model. We did, however, have to sacrifice time, but getting 99% accuracy was worth the wait (expected out of sample error of 0.68%). Let's see if gradient boosting can keep up.
+
+### Gradient Boosting
+
+```{r}
+gradientboostingmodel <- train(classe ~ ., data = trainingfortraining, method = "gbm", trControl = trControl, verbose = FALSE)
+print(gradientboostingmodel)
+```
+
+```{r}
+plot(gradientboostingmodel, main = "Progressive Accuracy from Gradient Boosting")
+```
+
+An increase in interaction depth and the number of boosting iterations resulted in increased accuracy, but the maximum tree depth never got unwieldy to deliver satisfactory results.
+
+```{r}
+prediction_model_3 <- predict(gradientboostingmodel, newdata = trainingfortesting)
+confusion_matrix_3 <- confusionMatrix(trainingfortesting$classe, prediction_model_3)
+confusion_matrix_3$table;confusion_matrix_3$overall[1]
+```
+
+We once again featured 5-fold cross validation. This model took longer than the random forest model to generate, and the results are slightly less impressive (expected out of sample error of 3.38%).
+
+## Conclusion
+
+The greatest degree of accuracy was obtained with the random forest model. Now, we will employ it in our evaluation of the test data.
+
+```{r}
+test_model_2 <- predict(randomforestmodel, newdata = testing)
+print(test_model_2)
+```
